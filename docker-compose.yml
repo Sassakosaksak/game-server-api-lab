@@ -1,0 +1,23 @@
+services:
+  db:
+    image: postgres:16
+    container_name: game-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - game-db-data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    container_name: game-api
+    environment:
+      ConnectionStrings__GameDb: "Host=db;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+
+volumes:
+  game-db-data:
