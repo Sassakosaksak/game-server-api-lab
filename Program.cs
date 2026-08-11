@@ -26,6 +26,12 @@ var jwtAudience = builder.Configuration["Jwt:Audience"]
     ?? throw new InvalidOperationException("JWT audience is not configured.");
 var gameTimeZoneId = builder.Configuration["Game:TimeZoneId"] ?? "Asia/Tokyo";
 var gameTimeZone = TimeZoneInfo.FindSystemTimeZoneById(gameTimeZoneId);
+var shopItems = new Dictionary<string, ShopItem>(StringComparer.Ordinal)
+{
+    ["potion"] = new("potion", "Potion", 50),
+    ["bronze-sword"] = new("bronze-sword", "Bronze Sword", 150),
+    ["legendary-sword"] = new("legendary-sword", "Legendary Sword", 1000)
+};
 
 if (Encoding.UTF8.GetByteCount(jwtKey) < 32)
 {
@@ -227,6 +233,90 @@ app.MapPost("/rewards/daily-login/claim", async (ClaimsPrincipal user, GameDbCon
             rewardDate
         });
     }
+}).RequireAuthorization();
+
+app.MapGet("/shop/items", () => Results.Ok(shopItems.Values));
+
+app.MapPost("/shop/items/{itemCode}/purchase", async (
+    string itemCode,
+    ClaimsPrincipal user,
+    GameDbContext db) =>
+{
+    if (!shopItems.TryGetValue(itemCode, out var item))
+    {
+        return Results.NotFound(new { message = "Item not found." });
+    }
+
+    var playerIdText = user.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+    if (!int.TryParse(playerIdText, out var playerId))
+    {
+        return Results.Unauthorized();
+    }
+
+    await using var transaction = await db.Database.BeginTransactionAsync();
+
+    // 残高確認とGold減算を一つのUPDATEで行い、同時購入でも残高を超えて減らさない。
+    var updatedPlayerCount = await db.Players
+        .Where(player => player.Id == playerId && player.Gold >= item.PriceGold)
+        .ExecuteUpdateAsync(setters => setters
+            .SetProperty(player => player.Gold, player => player.Gold - item.PriceGold));
+
+    if (updatedPlayerCount == 0)
+    {
+        await transaction.RollbackAsync();
+
+        var playerExists = await db.Players.AnyAsync(player => player.Id == playerId);
+        return playerExists
+            ? Results.BadRequest(new { message = "Not enough gold." })
+            : Results.NotFound(new { message = "Player not found." });
+    }
+
+    var purchasedAt = DateTime.UtcNow;
+    db.PlayerInventoryItems.Add(new PlayerInventoryItem
+    {
+        PlayerId = playerId,
+        ItemCode = item.Code,
+        AcquiredAt = purchasedAt
+    });
+    db.PurchaseHistories.Add(new PurchaseHistory
+    {
+        PlayerId = playerId,
+        ItemCode = item.Code,
+        PriceGold = item.PriceGold,
+        PurchasedAt = purchasedAt
+    });
+    await db.SaveChangesAsync();
+
+    var totalGold = await db.Players
+        .Where(player => player.Id == playerId)
+        .Select(player => player.Gold)
+        .SingleAsync();
+
+    await transaction.CommitAsync();
+
+    return Results.Ok(new
+    {
+        item = item.Code,
+        priceGold = item.PriceGold,
+        totalGold,
+        purchasedAt
+    });
+}).RequireAuthorization();
+
+app.MapGet("/players/me/items", async (ClaimsPrincipal user, GameDbContext db) =>
+{
+    var playerIdText = user.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+    if (!int.TryParse(playerIdText, out var playerId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var items = await db.PlayerInventoryItems
+        .Where(item => item.PlayerId == playerId)
+        .OrderByDescending(item => item.AcquiredAt)
+        .ToListAsync();
+
+    return Results.Ok(items);
 }).RequireAuthorization();
 
 app.Run();

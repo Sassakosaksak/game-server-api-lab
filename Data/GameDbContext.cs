@@ -12,6 +12,8 @@ public class GameDbContext : DbContext
 
     public DbSet<Player> Players => Set<Player>();
     public DbSet<PlayerRewardClaim> PlayerRewardClaims => Set<PlayerRewardClaim>();
+    public DbSet<PlayerInventoryItem> PlayerInventoryItems => Set<PlayerInventoryItem>();
+    public DbSet<PurchaseHistory> PurchaseHistories => Set<PurchaseHistory>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -30,6 +32,28 @@ public class GameDbContext : DbContext
             entity.HasOne<Player>()
                 .WithMany()
                 .HasForeignKey(claim => claim.PlayerId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<PlayerInventoryItem>(entity =>
+        {
+            entity.Property(item => item.ItemCode).HasMaxLength(50);
+            entity.HasIndex(item => item.PlayerId);
+
+            entity.HasOne<Player>()
+                .WithMany()
+                .HasForeignKey(item => item.PlayerId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<PurchaseHistory>(entity =>
+        {
+            entity.Property(history => history.ItemCode).HasMaxLength(50);
+            entity.HasIndex(history => history.PlayerId);
+
+            entity.HasOne<Player>()
+                .WithMany()
+                .HasForeignKey(history => history.PlayerId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }
