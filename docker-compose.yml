@@ -9,16 +9,29 @@ services:
     volumes:
       - game-db-data:/var/lib/postgresql/data
 
+  redis:
+    image: redis:7-alpine
+    container_name: game-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   api:
     build: .
     container_name: game-api
     environment:
       ConnectionStrings__GameDb: "Host=db;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
       Jwt__Key: ${JWT_KEY}
+      Redis__Configuration: "redis:6379,abortConnect=false"
     ports:
       - "8080:8080"
     depends_on:
-      - db
+      db:
+        condition: service_started
+      redis:
+        condition: service_healthy
 
 volumes:
   game-db-data:

@@ -1,6 +1,7 @@
 using GameServerApi.Data;
 using GameServerApi.Contracts;
 using GameServerApi.Models;
+using GameServerApi.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -9,6 +10,7 @@ using Npgsql;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -26,6 +28,8 @@ var jwtAudience = builder.Configuration["Jwt:Audience"]
     ?? throw new InvalidOperationException("JWT audience is not configured.");
 var gameTimeZoneId = builder.Configuration["Game:TimeZoneId"] ?? "Asia/Tokyo";
 var gameTimeZone = TimeZoneInfo.FindSystemTimeZoneById(gameTimeZoneId);
+var redisConfiguration = builder.Configuration["Redis:Configuration"]
+    ?? throw new InvalidOperationException("Redis configuration is not configured.");
 var shopItems = new Dictionary<string, ShopItem>(StringComparer.Ordinal)
 {
     ["potion"] = new("potion", "Potion", 50),
@@ -39,6 +43,11 @@ if (Encoding.UTF8.GetByteCount(jwtKey) < 32)
 }
 
 var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
+
+var redisOptions = ConfigurationOptions.Parse(redisConfiguration);
+redisOptions.AbortOnConnectFail = false;
+builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisOptions));
+builder.Services.AddSingleton<PlayerCacheService>();
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -154,7 +163,11 @@ app.MapGet("/players/{id:int}", async (int id, GameDbContext db) =>
         : Results.Ok(player);
 });
 
-app.MapGet("/players/me", async (ClaimsPrincipal user, GameDbContext db) =>
+app.MapGet("/players/me", async (
+    ClaimsPrincipal user,
+    GameDbContext db,
+    PlayerCacheService playerCache,
+    HttpResponse response) =>
 {
     var playerIdText = user.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
     if (!int.TryParse(playerIdText, out var playerId))
@@ -162,13 +175,18 @@ app.MapGet("/players/me", async (ClaimsPrincipal user, GameDbContext db) =>
         return Results.Unauthorized();
     }
 
-    var player = await db.Players.FindAsync(playerId);
-    return player is null
+    var result = await playerCache.GetPlayerAsync(playerId, db);
+    response.Headers["X-Cache"] = result.FromCache ? "HIT" : "MISS";
+
+    return result.Player is null
         ? Results.NotFound()
-        : Results.Ok(player);
+        : Results.Ok(result.Player);
 }).RequireAuthorization();
 
-app.MapPost("/rewards/daily-login/claim", async (ClaimsPrincipal user, GameDbContext db) =>
+app.MapPost("/rewards/daily-login/claim", async (
+    ClaimsPrincipal user,
+    GameDbContext db,
+    PlayerCacheService playerCache) =>
 {
     const string rewardCode = "daily-login";
     const int rewardGold = 100;
@@ -208,6 +226,7 @@ app.MapPost("/rewards/daily-login/claim", async (ClaimsPrincipal user, GameDbCon
         await db.SaveChangesAsync();
 
         await transaction.CommitAsync();
+        await playerCache.InvalidatePlayerAsync(player.Id);
 
         return Results.Ok(new
         {
@@ -240,7 +259,8 @@ app.MapGet("/shop/items", () => Results.Ok(shopItems.Values));
 app.MapPost("/shop/items/{itemCode}/purchase", async (
     string itemCode,
     ClaimsPrincipal user,
-    GameDbContext db) =>
+    GameDbContext db,
+    PlayerCacheService playerCache) =>
 {
     if (!shopItems.TryGetValue(itemCode, out var item))
     {
@@ -293,6 +313,7 @@ app.MapPost("/shop/items/{itemCode}/purchase", async (
         .SingleAsync();
 
     await transaction.CommitAsync();
+    await playerCache.InvalidatePlayerAsync(playerId);
 
     return Results.Ok(new
     {
