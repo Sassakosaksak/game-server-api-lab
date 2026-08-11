@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
+using Npgsql;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
@@ -23,6 +24,8 @@ var jwtIssuer = builder.Configuration["Jwt:Issuer"]
     ?? throw new InvalidOperationException("JWT issuer is not configured.");
 var jwtAudience = builder.Configuration["Jwt:Audience"]
     ?? throw new InvalidOperationException("JWT audience is not configured.");
+var gameTimeZoneId = builder.Configuration["Game:TimeZoneId"] ?? "Asia/Tokyo";
+var gameTimeZone = TimeZoneInfo.FindSystemTimeZoneById(gameTimeZoneId);
 
 if (Encoding.UTF8.GetByteCount(jwtKey) < 32)
 {
@@ -154,6 +157,73 @@ app.MapGet("/players/me", async (ClaimsPrincipal user, GameDbContext db) =>
     return player is null
         ? Results.NotFound()
         : Results.Ok(player);
+}).RequireAuthorization();
+
+app.MapPost("/rewards/daily-login/claim", async (ClaimsPrincipal user, GameDbContext db) =>
+{
+    const string rewardCode = "daily-login";
+    const int rewardGold = 100;
+
+    var playerIdText = user.FindFirst(JwtRegisteredClaimNames.Sub)?.Value;
+    if (!int.TryParse(playerIdText, out var playerId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var player = await db.Players.FindAsync(playerId);
+    if (player is null)
+    {
+        return Results.NotFound(new { message = "Player not found." });
+    }
+
+    var claimedAt = DateTime.UtcNow;
+    // 報酬の対象日はクライアント値ではなく、ゲームサーバーのJST時刻で決める。
+    var rewardDate = DateOnly.FromDateTime(
+        TimeZoneInfo.ConvertTimeFromUtc(claimedAt, gameTimeZone));
+
+    await using var transaction = await db.Database.BeginTransactionAsync();
+
+    try
+    {
+        db.PlayerRewardClaims.Add(new PlayerRewardClaim
+        {
+            PlayerId = player.Id,
+            RewardCode = rewardCode,
+            RewardDate = rewardDate,
+            GrantedGold = rewardGold,
+            ClaimedAt = claimedAt
+        });
+        await db.SaveChangesAsync();
+
+        player.Gold += rewardGold;
+        await db.SaveChangesAsync();
+
+        await transaction.CommitAsync();
+
+        return Results.Ok(new
+        {
+            rewardCode,
+            rewardDate,
+            grantedGold = rewardGold,
+            totalGold = player.Gold,
+            claimedAt
+        });
+    }
+    catch (DbUpdateException exception)
+        when (exception.InnerException is PostgresException
+        {
+            SqlState: PostgresErrorCodes.UniqueViolation
+        })
+    {
+        await transaction.RollbackAsync();
+
+        return Results.Conflict(new
+        {
+            message = "This reward has already been claimed today.",
+            rewardCode,
+            rewardDate
+        });
+    }
 }).RequireAuthorization();
 
 app.Run();
