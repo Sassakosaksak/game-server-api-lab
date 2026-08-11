@@ -1,12 +1,15 @@
 using GameServerApi.Data;
 using Microsoft.EntityFrameworkCore;
 using GameServerApi.Models;
+using GameServerApi.Contracts;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddDbContext<GameDbContext>(options =>
     options.UseNpgsql(
         builder.Configuration.GetConnectionString("GameDb")));
+
+builder.Services.AddValidation();
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -28,8 +31,15 @@ app.MapGet("/health", () => new
     time = DateTime.UtcNow
 });
 
-app.MapPost("/players", async (Player player, GameDbContext db) =>
+app.MapPost("/players", async (CreatePlayerRequest request, GameDbContext db) =>
 {
+    var player = new Player
+    {
+        Name = request.Name,
+        Level = request.Level,
+        Gold = request.Gold
+    };
+
     db.Players.Add(player);
     await db.SaveChangesAsync();
 
