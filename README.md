@@ -13,13 +13,15 @@ ASP.NET Core、PostgreSQL、Redis、Docker Composeを使ったゲームサーバ
 - JSON形式の構造化ログ
 - mainへのpushとPull Requestで実行するGitHub ActionsのReleaseビルド
 - k6によるランキングAPIの負荷試験
+- WebSocketによるランキング更新通知
 
 ## 構成
 
 ```text
 Swagger / クライアント
-        |
-        v
+   |              |
+   | HTTP         | WebSocket接続
+   v              v
 ASP.NET Core API
    |           |
    v           v
@@ -103,6 +105,39 @@ http://<EC2のパブリックIP>:8080/swagger
 
 `GET /players/me`と`GET /rankings/players`のレスポンスヘッダーには、Redisキャッシュの状態が`X-Cache: MISS`または`X-Cache: HIT`として出力されます。
 
+## WebSocketによるランキング更新通知
+
+ランキングへ影響する操作（プレイヤー作成、ログイン報酬受取、アイテム購入）が成功すると、APIは接続中のクライアントへ次の通知を送ります。
+
+```json
+{"type":"rankings-updated"}
+```
+
+この通知自体にはランキングの内容を含めません。クライアントは通知を受け取った後に、`GET /rankings/players?top=10`を再実行して最新のランキングを取得します。
+
+### 接続確認
+
+Swaggerを開いたブラウザで`F12`を押してConsoleを開き、次を実行します。
+
+```javascript
+const rankingSocket = new WebSocket(`ws://${location.host}/ws/rankings`);
+
+rankingSocket.onopen = () => console.log('WebSocket 接続成功');
+rankingSocket.onmessage = (event) => console.log('ランキング通知:', event.data);
+rankingSocket.onclose = () => console.log('WebSocket 切断');
+```
+
+- `ws://${location.host}/ws/rankings`: Swaggerと同じホスト・8080番ポートのWebSocket接続先
+- `onmessage`: APIから通知を受けたときにブラウザ側で実行される処理
+
+Consoleに`WebSocket 接続成功`が出たまま、Swaggerの`POST /players`でプレイヤーを作成します。次が表示されれば成功です。
+
+```text
+ランキング通知: {"type":"rankings-updated"}
+```
+
+`/ws/rankings`は通常のHTTP取得用APIではありません。WebSocketクライアントから接続するためのエンドポイントです。
+
 ## ログ確認
 
 APIのJSON形式ログを継続表示します。
@@ -138,4 +173,4 @@ NuGetパッケージ復元
 
 ## 今後の候補
 
-- 任意: WebSocketによるリアルタイム通信
+- 任意: WebSocket通知を受けて、ブラウザ画面のランキングを自動再取得・再描画するクライアント実装
