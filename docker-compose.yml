@@ -25,6 +25,8 @@ services:
       ConnectionStrings__GameDb: "Host=db;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}"
       Jwt__Key: ${JWT_KEY}
       Redis__Configuration: "redis:6379,abortConnect=false"
+      Features__EnableTestDataApi: ${ENABLE_TEST_DATA_API:-false}
+      TestApi__Key: ${TEST_API_KEY:-}
     ports:
       - "8080:8080"
     depends_on:

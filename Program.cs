@@ -2,6 +2,7 @@ using GameServerApi.Data;
 using GameServerApi.Contracts;
 using GameServerApi.Models;
 using GameServerApi.Services;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -9,6 +10,7 @@ using Microsoft.OpenApi;
 using Npgsql;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using StackExchange.Redis;
 
@@ -30,6 +32,8 @@ var gameTimeZoneId = builder.Configuration["Game:TimeZoneId"] ?? "Asia/Tokyo";
 var gameTimeZone = TimeZoneInfo.FindSystemTimeZoneById(gameTimeZoneId);
 var redisConfiguration = builder.Configuration["Redis:Configuration"]
     ?? throw new InvalidOperationException("Redis configuration is not configured.");
+var enableTestDataApi = builder.Configuration.GetValue<bool>("Features:EnableTestDataApi");
+var testApiKey = builder.Configuration["TestApi:Key"];
 var shopItems = new Dictionary<string, ShopItem>(StringComparer.Ordinal)
 {
     ["potion"] = new("potion", "Potion", 50),
@@ -40,6 +44,11 @@ var shopItems = new Dictionary<string, ShopItem>(StringComparer.Ordinal)
 if (Encoding.UTF8.GetByteCount(jwtKey) < 32)
 {
     throw new InvalidOperationException("JWT key must be at least 32 bytes.");
+}
+
+if (enableTestDataApi && string.IsNullOrWhiteSpace(testApiKey))
+{
+    throw new InvalidOperationException("Test API key is not configured.");
 }
 
 var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey));
@@ -155,6 +164,34 @@ app.MapPost("/players", async (
 
     return Results.Created($"/players/{player.Id}", player);
 });
+
+if (enableTestDataApi)
+{
+    app.MapPost("/dev/test-players", async (
+        CreateTestPlayerRequest request,
+        [FromHeader(Name = "X-Test-Api-Key")] string? providedTestApiKey,
+        GameDbContext db,
+        RankingCacheService rankingCache) =>
+    {
+        if (!HasValidTestApiKey(providedTestApiKey, testApiKey!))
+        {
+            return Results.Forbid();
+        }
+
+        var player = new Player
+        {
+            Name = request.Name,
+            Level = request.Level,
+            Gold = request.Gold
+        };
+
+        db.Players.Add(player);
+        await db.SaveChangesAsync();
+        await rankingCache.InvalidateRankingsAsync();
+
+        return Results.Created($"/players/{player.Id}", player);
+    }).AllowAnonymous();
+}
 
 app.MapGet("/players", async (GameDbContext db) =>
 {
@@ -378,3 +415,17 @@ app.MapGet("/players/me/items", async (ClaimsPrincipal user, GameDbContext db) =
 }).RequireAuthorization();
 
 app.Run();
+
+static bool HasValidTestApiKey(string? providedKey, string expectedKey)
+{
+    if (string.IsNullOrEmpty(providedKey))
+    {
+        return false;
+    }
+
+    var providedBytes = Encoding.UTF8.GetBytes(providedKey);
+    var expectedBytes = Encoding.UTF8.GetBytes(expectedKey);
+
+    return providedBytes.Length == expectedBytes.Length
+        && CryptographicOperations.FixedTimeEquals(providedBytes, expectedBytes);
+}
