@@ -139,11 +139,14 @@ app.MapPost("/players", async (
     GameDbContext db,
     RankingCacheService rankingCache) =>
 {
+    const int initialGold = 100;
+
     var player = new Player
     {
         Name = request.Name,
         Level = request.Level,
-        Gold = request.Gold
+        // 初期Goldはクライアント入力を使わず、ゲームサーバー側で決定する。
+        Gold = initialGold
     };
 
     db.Players.Add(player);
