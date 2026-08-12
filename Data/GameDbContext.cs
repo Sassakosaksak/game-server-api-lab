@@ -17,6 +17,17 @@ public class GameDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<Player>(entity =>
+        {
+            // ランキングのGold降順、Level降順、ID昇順の取得を支える複合インデックス。
+            entity.HasIndex(player => new
+            {
+                player.Gold,
+                player.Level,
+                player.Id
+            }).IsDescending(true, true, false);
+        });
+
         modelBuilder.Entity<PlayerRewardClaim>(entity =>
         {
             entity.Property(claim => claim.RewardCode).HasMaxLength(50);

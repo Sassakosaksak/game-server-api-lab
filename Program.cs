@@ -48,6 +48,7 @@ var redisOptions = ConfigurationOptions.Parse(redisConfiguration);
 redisOptions.AbortOnConnectFail = false;
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisOptions));
 builder.Services.AddSingleton<PlayerCacheService>();
+builder.Services.AddSingleton<RankingCacheService>();
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -133,7 +134,10 @@ app.MapPost("/auth/dev-login", async (LoginRequest request, GameDbContext db) =>
     });
 }).AllowAnonymous();
 
-app.MapPost("/players", async (CreatePlayerRequest request, GameDbContext db) =>
+app.MapPost("/players", async (
+    CreatePlayerRequest request,
+    GameDbContext db,
+    RankingCacheService rankingCache) =>
 {
     var player = new Player
     {
@@ -144,6 +148,7 @@ app.MapPost("/players", async (CreatePlayerRequest request, GameDbContext db) =>
 
     db.Players.Add(player);
     await db.SaveChangesAsync();
+    await rankingCache.InvalidateRankingsAsync();
 
     return Results.Created($"/players/{player.Id}", player);
 });
@@ -161,6 +166,31 @@ app.MapGet("/players/{id:int}", async (int id, GameDbContext db) =>
     return player is null
         ? Results.NotFound()
         : Results.Ok(player);
+});
+
+app.MapGet("/rankings/players", async (
+    int? top,
+    GameDbContext db,
+    RankingCacheService rankingCache,
+    HttpResponse response) =>
+{
+    var requestedTop = top ?? 10;
+    if (requestedTop is < 1 or > 100)
+    {
+        return Results.ValidationProblem(new Dictionary<string, string[]>
+        {
+            ["top"] = ["Top must be between 1 and 100."]
+        });
+    }
+
+    var result = await rankingCache.GetRankingsAsync(requestedTop, db);
+    response.Headers["X-Cache"] = result.FromCache ? "HIT" : "MISS";
+
+    return Results.Ok(new
+    {
+        top = requestedTop,
+        rankings = result.Rankings
+    });
 });
 
 app.MapGet("/players/me", async (
@@ -186,7 +216,8 @@ app.MapGet("/players/me", async (
 app.MapPost("/rewards/daily-login/claim", async (
     ClaimsPrincipal user,
     GameDbContext db,
-    PlayerCacheService playerCache) =>
+    PlayerCacheService playerCache,
+    RankingCacheService rankingCache) =>
 {
     const string rewardCode = "daily-login";
     const int rewardGold = 100;
@@ -227,6 +258,7 @@ app.MapPost("/rewards/daily-login/claim", async (
 
         await transaction.CommitAsync();
         await playerCache.InvalidatePlayerAsync(player.Id);
+        await rankingCache.InvalidateRankingsAsync();
 
         return Results.Ok(new
         {
@@ -260,7 +292,8 @@ app.MapPost("/shop/items/{itemCode}/purchase", async (
     string itemCode,
     ClaimsPrincipal user,
     GameDbContext db,
-    PlayerCacheService playerCache) =>
+    PlayerCacheService playerCache,
+    RankingCacheService rankingCache) =>
 {
     if (!shopItems.TryGetValue(itemCode, out var item))
     {
@@ -314,6 +347,7 @@ app.MapPost("/shop/items/{itemCode}/purchase", async (
 
     await transaction.CommitAsync();
     await playerCache.InvalidatePlayerAsync(playerId);
+    await rankingCache.InvalidateRankingsAsync();
 
     return Results.Ok(new
     {
