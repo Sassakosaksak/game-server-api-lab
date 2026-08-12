@@ -69,4 +69,46 @@ internal static partial class GameLog
         int playerId,
         string itemCode,
         int priceGold);
+
+    [LoggerMessage(
+        EventId = 3000,
+        Level = LogLevel.Information,
+        Message = "ランキング更新通知用WebSocketに接続しました。ConnectionId: {ConnectionId}")]
+    internal static partial void RankingWebSocketConnected(
+        ILogger logger,
+        string connectionId);
+
+    [LoggerMessage(
+        EventId = 3001,
+        Level = LogLevel.Information,
+        Message = "ランキング更新通知用WebSocketを切断しました。ConnectionId: {ConnectionId}")]
+    internal static partial void RankingWebSocketDisconnected(
+        ILogger logger,
+        string connectionId);
+
+    [LoggerMessage(
+        EventId = 3002,
+        Level = LogLevel.Information,
+        Message = "ランキング更新をWebSocketへ通知しました。ConnectionCount: {ConnectionCount}")]
+    internal static partial void RankingUpdateNotified(
+        ILogger logger,
+        int connectionCount);
+
+    [LoggerMessage(
+        EventId = 3003,
+        Level = LogLevel.Warning,
+        Message = "ランキング更新通知用WebSocketの接続中に例外が発生しました。ConnectionId: {ConnectionId}")]
+    internal static partial void RankingWebSocketConnectionFailed(
+        ILogger logger,
+        string connectionId,
+        Exception exception);
+
+    [LoggerMessage(
+        EventId = 3004,
+        Level = LogLevel.Warning,
+        Message = "ランキング更新通知用WebSocketへの送信に失敗しました。ConnectionId: {ConnectionId}")]
+    internal static partial void RankingWebSocketNotificationFailed(
+        ILogger logger,
+        string connectionId,
+        Exception exception);
 }

@@ -14,6 +14,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using StackExchange.Redis;
+using System.Net.WebSockets;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -59,6 +60,7 @@ redisOptions.AbortOnConnectFail = false;
 builder.Services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisOptions));
 builder.Services.AddSingleton<PlayerCacheService>();
 builder.Services.AddSingleton<RankingCacheService>();
+builder.Services.AddSingleton<RankingUpdateNotifier>();
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -107,6 +109,7 @@ using (var scope = app.Services.CreateScope())
 app.UseSwagger();
 app.UseSwaggerUI();
 app.UseMiddleware<HttpRequestLoggingMiddleware>();
+app.UseWebSockets();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -114,6 +117,25 @@ app.MapGet("/health", () => new
 {
     status = "ok",
     time = DateTime.UtcNow
+});
+
+app.Map("/ws/rankings", async (
+    HttpContext context,
+    RankingUpdateNotifier rankingUpdateNotifier) =>
+{
+    if (!context.WebSockets.IsWebSocketRequest)
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await context.Response.WriteAsJsonAsync(new
+        {
+            message = "WebSocket connection is required."
+        });
+        return;
+    }
+
+    using var socket = await context.WebSockets.AcceptWebSocketAsync();
+    var connectionId = Guid.NewGuid().ToString("N");
+    await rankingUpdateNotifier.WaitForDisconnectAsync(socket, connectionId);
 });
 
 // 開発学習用: 指定したプレイヤーとしてJWTを発行する。本番ではID・パスワード等の本人確認が必要。
@@ -148,7 +170,8 @@ app.MapPost("/auth/dev-login", async (LoginRequest request, GameDbContext db) =>
 app.MapPost("/players", async (
     CreatePlayerRequest request,
     GameDbContext db,
-    RankingCacheService rankingCache) =>
+    RankingCacheService rankingCache,
+    RankingUpdateNotifier rankingUpdateNotifier) =>
 {
     const int initialGold = 100;
 
@@ -163,6 +186,7 @@ app.MapPost("/players", async (
     db.Players.Add(player);
     await db.SaveChangesAsync();
     await rankingCache.InvalidateRankingsAsync();
+    await rankingUpdateNotifier.NotifyRankingsUpdatedAsync();
 
     return Results.Created($"/players/{player.Id}", player);
 });
@@ -173,7 +197,8 @@ if (enableTestDataApi)
         CreateTestPlayerRequest request,
         [FromHeader(Name = "X-Test-Api-Key")] string? providedTestApiKey,
         GameDbContext db,
-        RankingCacheService rankingCache) =>
+        RankingCacheService rankingCache,
+        RankingUpdateNotifier rankingUpdateNotifier) =>
     {
         if (!HasValidTestApiKey(providedTestApiKey, testApiKey!))
         {
@@ -190,6 +215,7 @@ if (enableTestDataApi)
         db.Players.Add(player);
         await db.SaveChangesAsync();
         await rankingCache.InvalidateRankingsAsync();
+        await rankingUpdateNotifier.NotifyRankingsUpdatedAsync();
 
         return Results.Created($"/players/{player.Id}", player);
     }).AllowAnonymous();
@@ -260,6 +286,7 @@ app.MapPost("/rewards/daily-login/claim", async (
     GameDbContext db,
     PlayerCacheService playerCache,
     RankingCacheService rankingCache,
+    RankingUpdateNotifier rankingUpdateNotifier,
     ILogger<Program> logger) =>
 {
     const string rewardCode = "daily-login";
@@ -302,6 +329,7 @@ app.MapPost("/rewards/daily-login/claim", async (
         await transaction.CommitAsync();
         await playerCache.InvalidatePlayerAsync(player.Id);
         await rankingCache.InvalidateRankingsAsync();
+        await rankingUpdateNotifier.NotifyRankingsUpdatedAsync();
 
         GameLog.DailyRewardClaimed(
             logger,
@@ -347,6 +375,7 @@ app.MapPost("/shop/items/{itemCode}/purchase", async (
     GameDbContext db,
     PlayerCacheService playerCache,
     RankingCacheService rankingCache,
+    RankingUpdateNotifier rankingUpdateNotifier,
     ILogger<Program> logger) =>
 {
     if (!shopItems.TryGetValue(itemCode, out var item))
@@ -411,6 +440,7 @@ app.MapPost("/shop/items/{itemCode}/purchase", async (
     await transaction.CommitAsync();
     await playerCache.InvalidatePlayerAsync(playerId);
     await rankingCache.InvalidateRankingsAsync();
+    await rankingUpdateNotifier.NotifyRankingsUpdatedAsync();
 
     GameLog.ShopItemPurchased(
         logger,
