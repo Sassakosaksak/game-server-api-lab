@@ -35,5 +35,14 @@ services:
       redis:
         condition: service_healthy
 
+  k6:
+    image: grafana/k6:latest
+    profiles: ["load-test"]
+    environment:
+      BASE_URL: http://api:8080
+    volumes:
+      - ./load-tests:/scripts:ro
+    entrypoint: ["k6", "run", "/scripts/rankings.js"]
+
 volumes:
   game-db-data:
