@@ -1,5 +1,6 @@
 using GameServerApi.Data;
 using GameServerApi.Contracts;
+using GameServerApi.Logging;
 using GameServerApi.Models;
 using GameServerApi.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -105,6 +106,7 @@ using (var scope = app.Services.CreateScope())
 
 app.UseSwagger();
 app.UseSwaggerUI();
+app.UseMiddleware<HttpRequestLoggingMiddleware>();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -257,7 +259,8 @@ app.MapPost("/rewards/daily-login/claim", async (
     ClaimsPrincipal user,
     GameDbContext db,
     PlayerCacheService playerCache,
-    RankingCacheService rankingCache) =>
+    RankingCacheService rankingCache,
+    ILogger<Program> logger) =>
 {
     const string rewardCode = "daily-login";
     const int rewardGold = 100;
@@ -300,6 +303,14 @@ app.MapPost("/rewards/daily-login/claim", async (
         await playerCache.InvalidatePlayerAsync(player.Id);
         await rankingCache.InvalidateRankingsAsync();
 
+        GameLog.DailyRewardClaimed(
+            logger,
+            player.Id,
+            rewardCode,
+            rewardDate,
+            rewardGold,
+            player.Gold);
+
         return Results.Ok(new
         {
             rewardCode,
@@ -317,6 +328,8 @@ app.MapPost("/rewards/daily-login/claim", async (
     {
         await transaction.RollbackAsync();
 
+        GameLog.DailyRewardAlreadyClaimed(logger, playerId, rewardCode, rewardDate);
+
         return Results.Conflict(new
         {
             message = "This reward has already been claimed today.",
@@ -333,7 +346,8 @@ app.MapPost("/shop/items/{itemCode}/purchase", async (
     ClaimsPrincipal user,
     GameDbContext db,
     PlayerCacheService playerCache,
-    RankingCacheService rankingCache) =>
+    RankingCacheService rankingCache,
+    ILogger<Program> logger) =>
 {
     if (!shopItems.TryGetValue(itemCode, out var item))
     {
@@ -359,6 +373,15 @@ app.MapPost("/shop/items/{itemCode}/purchase", async (
         await transaction.RollbackAsync();
 
         var playerExists = await db.Players.AnyAsync(player => player.Id == playerId);
+        if (playerExists)
+        {
+            GameLog.ShopPurchaseRejectedForInsufficientGold(
+                logger,
+                playerId,
+                item.Code,
+                item.PriceGold);
+        }
+
         return playerExists
             ? Results.BadRequest(new { message = "Not enough gold." })
             : Results.NotFound(new { message = "Player not found." });
@@ -388,6 +411,13 @@ app.MapPost("/shop/items/{itemCode}/purchase", async (
     await transaction.CommitAsync();
     await playerCache.InvalidatePlayerAsync(playerId);
     await rankingCache.InvalidateRankingsAsync();
+
+    GameLog.ShopItemPurchased(
+        logger,
+        playerId,
+        item.Code,
+        item.PriceGold,
+        totalGold);
 
     return Results.Ok(new
     {
