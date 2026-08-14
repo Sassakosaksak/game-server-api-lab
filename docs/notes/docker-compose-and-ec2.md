@@ -79,9 +79,3 @@ Redisプロセス起動 → started → healthcheck成功 → healthy → API起
 ```
 
 `service_started`はプロセス起動済み、`service_healthy`は接続できる状態まで確認済み、という違いがある。`depends_on`は起動時の順序だけを制御し、後からRedisが落ちてもAPIを自動再起動するものではない。
-
-## コンテナにSDKがない理由
-
-最終APIイメージは実行専用の.NET Runtimeであり、SDKを含まない。そのためコンテナ内で`dotnet ef ...`を実行すると「SDKがない」と失敗する。
-
-Migrationの作成はローカルSDKで行い、EC2ではアプリ起動時の`MigrateAsync()`が反映する。
