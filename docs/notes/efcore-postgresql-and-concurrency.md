@@ -67,10 +67,6 @@ PlayerId + RewardCode + RewardDate
 
 `RewardDate`はゲームサーバーのJST日付。`ClaimedAt`は監査用のUTC時刻。
 
-```text
-Player 1 / daily-login / 2026-08-12
-```
-
 を2回登録しようとしても、PostgreSQLがユニーク制約違反として拒否する。`ClaimedAt`だけでは「同じゲーム日か」を表しにくいため、業務上の日付は別に持つ。
 
 ## ランキング用インデックス

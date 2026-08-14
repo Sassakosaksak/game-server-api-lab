@@ -67,6 +67,8 @@ docker exec game-redis redis-cli --scan --pattern 'player:*'
 
 今のランキングは、PostgreSQLで並べた結果をRedisへ短時間キャッシュする方式。
 
+> Redis ZSETはこのプロジェクトでは**未実装**。将来のランキング方式として比較・検討した内容である。
+
 Redis ZSETは別の選択肢で、`member=Player ID`、`score=Gold`として順位順をRedis自身に維持するデータ型。
 
 ```text

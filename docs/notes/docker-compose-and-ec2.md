@@ -4,13 +4,17 @@
 
 ```text
 インターネット
-  → EC2の8080番ポート
-  → game-api（ASP.NET Core）
+  → AWS Security GroupがTCP 8080を許可
+  → EC2ホストの8080番ポート
+  → Composeのポート公開 8080:8080
+  → game-api（ASP.NET Core）の8080番ポート
       ├─ game-db（PostgreSQL）
       └─ game-redis（Redis）
 ```
 
-外部へ公開するのはAPIの`8080`だけ。PostgreSQLとRedisはComposeネットワーク内でAPIからだけ接続する。
+Security Groupは「インターネットからEC2へ届く通信」を許可するAWS側のファイアウォール。今回、受信ルールでTCP 8080を許可しているため、EC2へ届いた8080番通信をComposeの`ports: "8080:8080"`がAPIコンテナへ転送する。
+
+PostgreSQLとRedisはComposeに`ports`指定がないため、Security Groupでポートを開けても外部公開されない。Composeネットワーク内でAPIからだけ接続する。
 
 ```yaml
 ConnectionStrings__GameDb: "Host=db;Port=5432;..."
