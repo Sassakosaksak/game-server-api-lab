@@ -9,3 +9,5 @@
 - [Redisキャッシュ](redis-caching.md)
 - [ゲームAPIの入力検証・テストデータ](game-api-design-and-validation.md)
 - [Git・GitHub・デプロイ](git-and-deployment.md)
+- [k6負荷試験](k6-load-testing.md)
+- [WebSocket・サーバーからの通知](websocket-and-server-push.md)
